@@ -7,13 +7,13 @@ import sys
 import json
 import os
 import csv
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout,
-    QMessageBox, QComboBox, QDateEdit, QInputDialog, QTabWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem, QFileDialog, QDialog
+    QMessageBox, QComboBox, QDateEdit, QInputDialog, QTabWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem, QFileDialog, QDialog, QCompleter, QAction
 )
 from PyQt5.QtCore import QDate, QThread, pyqtSignal
-from PyQt5.QtGui import QPixmap, QIcon, QMovie
+from PyQt5.QtGui import QPixmap, QIcon, QMovie, QColor
 from PyQt5.QtSvg import QSvgWidget
 import psycopg2
 
@@ -76,6 +76,33 @@ class DBWorker(QThread):
         except Exception as e:
             self.result_ready.emit(None, None, str(e), 'error')
 
+class DBWorkerWithDateField(QThread):
+    result_ready = pyqtSignal(object, object, object, object)  # rows, colnames, error, status
+    def __init__(self, conn_params, gtin, date_from, date_to, date_field):
+        super().__init__()
+        self.conn_params = conn_params
+        self.gtin = gtin
+        self.date_from = date_from
+        self.date_to = date_to
+        self.date_field = date_field
+    def run(self):
+        try:
+            conn = psycopg2.connect(**self.conn_params)
+            cur = conn.cursor()
+            sql = f"SELECT * FROM codes WHERE code LIKE %s AND {self.date_field}::date >= %s"
+            params = [f"%{self.gtin}%", self.date_from]
+            if self.date_to:
+                sql += f" AND {self.date_field}::date <= %s"
+                params.append(self.date_to)
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+            colnames = [desc[0] for desc in cur.description]
+            cur.close()
+            conn.close()
+            self.result_ready.emit(rows, colnames, None, 'ok')
+        except Exception as e:
+            self.result_ready.emit(None, None, str(e), 'error')
+
 class LoadingDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -111,22 +138,84 @@ class MainTab(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout()
+        # Поиск по продуктам
+        search_layout = QHBoxLayout()
+        self.product_search = QLineEdit()
+        self.product_search.setPlaceholderText('Поиск продукта...')
+        self.product_search.setFixedHeight(52)
+        self.product_search.setFixedWidth(400)
+        self.product_search.setStyleSheet('''
+            QLineEdit {
+                border-radius: 18px;
+                border: 1.5px solid #5A7C7C;
+                background: #15332B;
+                color: #F1F1F1;
+                padding-left: 16px;
+                font-size: 18px;
+            }
+        ''')
+        # Автодополнение
+        self.completer = QCompleter()
+        self.completer.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
+        self.product_search.setCompleter(self.completer)
+        self.product_search.textEdited.connect(self.on_search_text)
+        self.product_search.returnPressed.connect(self.on_search_select)
+        self.product_search.textEdited.connect(self.update_popup_height)
+        self.completer.activated[str].connect(self.on_completer_activated)
+        search_layout.addWidget(self.product_search)
+        layout.addLayout(search_layout)
         # Линии
         line_layout = QHBoxLayout()
         self.line_combo = QComboBox()
-        self.line_combo.addItem('--- Новая линия ---')
+        self.line_combo.addItem('--- Выберите линию ---')
         self.line_combo.addItems(self.parent.lines.keys())
         self.line_combo.currentTextChanged.connect(self.on_line_select)
         line_layout.addWidget(QLabel('Линия:'))
         line_layout.addWidget(self.line_combo)
         layout.addLayout(line_layout)
-        # Продукты
+        # Продукты (с аннотацией GTIN)
         prod_layout = QHBoxLayout()
         self.product_combo = QComboBox()
         self.update_products()
+        self.product_combo.setItemDelegate(ProductDelegate(self))
         prod_layout.addWidget(QLabel('Продукт:'))
         prod_layout.addWidget(self.product_combo)
         layout.addLayout(prod_layout)
+        # Теперь product_combo уже создан — можно задать высоту popup подсказок
+        popup = self.completer.popup()
+        row_height = self.product_combo.sizeHint().height()
+        popup.setStyleSheet(f'''
+            QAbstractItemView {{
+                background: #1B3B33;
+                border-radius: 8px;
+                color: #F1F1F1;
+                border: 1.5px solid #FF5B00;
+                font-size: 18px;
+                font-weight: 600;
+                selection-background-color: #FF5B00;
+                selection-color: #fff;
+                padding: 8px 16px;
+                min-height: {row_height}px;
+                min-width: 320px;
+            }}
+            QAbstractItemView::item {{
+                min-height: {row_height}px;
+                padding: 8px 16px;
+                margin-bottom: 8px;
+            }}
+        ''')
+        popup.setMinimumWidth(400)
+        self.update_popup_height()
+        self.product_search.textEdited.connect(self.on_search_text)
+        self.product_search.returnPressed.connect(self.on_search_select)
+        # Выбор поля даты
+        date_field_layout = QHBoxLayout()
+        date_field_layout.addWidget(QLabel('Искать по:'))
+        self.date_field_combo = QComboBox()
+        self.date_field_combo.addItem('Дата записи в БД (dtime_ins)')
+        self.date_field_combo.addItem('Дата производства (production_date)')
+        date_field_layout.addWidget(self.date_field_combo)
+        layout.addLayout(date_field_layout)
         # Дата с/по
         date_row = QHBoxLayout()
         date_row.addWidget(QLabel('Дата с:'))
@@ -192,13 +281,18 @@ class MainTab(QWidget):
         current = self.product_combo.currentText()
         self.product_combo.blockSignals(True)
         self.product_combo.clear()
-        for name in self.parent.products:
-            self.product_combo.addItem(name)
+        # Для автодополнения
+        names = list(self.parent.products.keys())
+        self.completer.setModel(QtCore.QStringListModel(names))
+        for name in names:
+            gtin = self.parent.products[name]
+            self.product_combo.addItem(f'{name}', gtin)
         # Восстановить выбор, если он есть
         idx = self.product_combo.findText(current)
         if idx != -1:
             self.product_combo.setCurrentIndex(idx)
         self.product_combo.blockSignals(False)
+        self.update_popup_height()
 
     def on_line_select(self, name):
         if name in self.parent.lines:
@@ -219,6 +313,10 @@ class MainTab(QWidget):
         gtin = self.parent.products[product_name]
         date_from = self.date_from.date().toString('yyyy-MM-dd')
         date_to = self.date_to.date().toString('yyyy-MM-dd') if self.date_to.date() else None
+        # Выбор поля даты
+        date_field = 'dtime_ins'
+        if self.date_field_combo.currentIndex() == 1:
+            date_field = 'production_date'
         conn_params = {
             'host': line['ip'],
             'port': line['port'],
@@ -230,7 +328,7 @@ class MainTab(QWidget):
         self.loading = LoadingDialog(self)
         self.loading.show()
         # Запускаем поток
-        self.worker = DBWorker(conn_params, gtin, date_from, date_to)
+        self.worker = DBWorkerWithDateField(conn_params, gtin, date_from, date_to, date_field)
         self.worker.result_ready.connect(self.on_db_result)
         self.worker.start()
 
@@ -286,6 +384,73 @@ class MainTab(QWidget):
             QMessageBox.information(self, 'Выгрузка завершена', f'Данные успешно сохранены в {path}')
         except Exception as e:
             QMessageBox.critical(self, 'Ошибка', f'Ошибка при сохранении: {e}')
+
+    def on_search_text(self, text):
+        # Автоматически подсвечивать первый совпадающий продукт
+        idx = self.product_combo.findText(text, QtCore.Qt.MatchStartsWith)
+        if idx != -1:
+            self.product_combo.setCurrentIndex(idx)
+        self.update_popup_height()
+
+    def on_search_select(self):
+        text = self.product_search.text()
+        idx = self.product_combo.findText(text, QtCore.Qt.MatchExactly)
+        if idx != -1:
+            self.product_combo.setCurrentIndex(idx)
+
+    def update_popup_height(self):
+        popup = self.completer.popup()
+        model = self.completer.model()
+        # Получаем количество совпадений (фильтрованных)
+        count = 0
+        for i in range(model.rowCount()):
+            idx = model.index(i, 0)
+            if self.completer.filterMode() == QtCore.Qt.MatchContains:
+                if self.product_search.text().lower() in model.data(idx, QtCore.Qt.DisplayRole).lower():
+                    count += 1
+            else:
+                count += 1
+        row_height = self.product_combo.sizeHint().height() + 8  # +spacing
+        max_rows = 8
+        popup.setFixedHeight(max(1, min(count, max_rows)) * row_height + 4)
+
+    def on_completer_activated(self, text):
+        idx = self.product_combo.findText(text, QtCore.Qt.MatchExactly)
+        if idx != -1:
+            self.product_combo.setCurrentIndex(idx)
+
+class ProductDelegate(QtWidgets.QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        name = index.data(QtCore.Qt.DisplayRole)
+        gtin = index.data(QtCore.Qt.UserRole) or index.data(QtCore.Qt.ToolTipRole) or ''
+        if not gtin:
+            gtin = index.model().data(index, QtCore.Qt.UserRole)
+        painter.save()
+        rect = option.rect
+        # Выделение при выборе или наведении
+        if option.state & (QtWidgets.QStyle.State_Selected | QtWidgets.QStyle.State_MouseOver):
+            painter.setBrush(QColor('#2196F3'))
+            painter.setPen(QtCore.Qt.NoPen)
+            painter.drawRect(rect)
+            text_color = QtCore.Qt.white
+        else:
+            text_color = QtCore.Qt.white
+        # Основной текст (название)
+        painter.setPen(text_color)
+        font = option.font
+        font.setPointSize(16)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(rect.left()+8, rect.top()+22, name)
+        # Аннотация (GTIN)
+        font.setPointSize(12)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QtCore.Qt.gray if not (option.state & (QtWidgets.QStyle.State_Selected | QtWidgets.QStyle.State_MouseOver)) else QtCore.Qt.white)
+        painter.drawText(rect.left()+8, rect.top()+60, f'GTIN: {gtin}')
+        painter.restore()
+    def sizeHint(self, option, index):
+        return QtCore.QSize(320, 74)
 
 class ProductsTab(QWidget):
     def __init__(self, parent):
@@ -668,8 +833,10 @@ class DBChecker(QMainWindow):
                 selection-color: #fff;
             }
             QComboBox QAbstractItemView::item:hover {
-                background: #2196F3;
+                background: #FF5B00;
                 color: #fff;
+                font-weight: bold;
+                border-radius: 8px;
             }
             QDateEdit {
                 qproperty-calendarPopup: true;

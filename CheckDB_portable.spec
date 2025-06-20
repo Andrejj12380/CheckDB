@@ -12,7 +12,6 @@ a = Analysis([
     datas=[
         ('new_logo.png', '.'),
         ('flash.ico', '.'),
-        ('loader.gif', '.'),
         ('products.json', '.'),
         ('profiles.json', '.'),
         ('appsettings.json', '.'),
