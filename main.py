@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QDate, QThread, pyqtSignal, QStringListModel, Qt, QEvent, QTimer
 from PyQt5.QtGui import QPixmap, QIcon, QMovie, QColor
 from PyQt5.QtSvg import QSvgWidget
+from PyQt5 import QtSvg
 import psycopg2
 import requests
 import subprocess
@@ -1203,6 +1204,87 @@ class HelpTab(QWidget):
         section_widget.setLayout(section_layout)
         return section_widget
 
+class UpdateTab(QWidget):
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+        self.status_label = QLabel('')
+        self.status_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.status_label.setStyleSheet('font-size: 18px; color: #FF8C42;')
+        layout.addWidget(self.status_label)
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setValue(0)
+        self.progress.setVisible(False)
+        layout.addWidget(self.progress)
+        self.update_btn = QPushButton('Проверить\nи обновить')
+        self.update_btn.setFixedHeight(64)
+        self.update_btn.setFixedWidth(220)
+        self.update_btn.setStyleSheet('font-size: 22px; border-radius: 18px; text-align: center; line-height: 120%;')
+        self.update_btn.clicked.connect(self.start_update)
+        layout.addWidget(self.update_btn)
+        layout.addStretch(1)
+        self.setLayout(layout)
+
+    def start_update(self):
+        self.update_btn.setEnabled(False)
+        self.status_label.setText('Проверка обновлений...')
+        QtCore.QTimer.singleShot(100, self.check_for_update_and_run)
+
+    def check_for_update_and_run(self):
+        api_url = "https://api.github.com/repos/Andrejj12380/CheckDB/releases/latest"
+        try:
+            r = requests.get(api_url)
+            latest = r.json()
+            if "assets" not in latest or not latest["assets"]:
+                self.status_label.setText('Нет доступных обновлений на GitHub!')
+                self.update_btn.setEnabled(True)
+                return
+            exe_name = "CheckDB.exe"
+            for asset in latest["assets"]:
+                if asset["name"] == exe_name:
+                    download_url = asset["browser_download_url"]
+                    break
+            else:
+                self.status_label.setText('Не найден файл обновления!')
+                self.update_btn.setEnabled(True)
+                return
+            # Скачиваем с прогрессом
+            self.status_label.setText('Скачивание обновления...')
+            self.progress.setVisible(True)
+            new_exe_path = os.path.join(os.path.dirname(sys.executable), "CheckDB_new.exe")
+            with requests.get(download_url, stream=True) as r:
+                r.raise_for_status()
+                total = int(r.headers.get('content-length', 0))
+                downloaded = 0
+                with open(new_exe_path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total:
+                                percent = int(downloaded * 100 / total)
+                                self.progress.setValue(percent)
+            self.progress.setValue(100)
+            self.status_label.setText('Обновление скачано! Перезапуск...')
+            QtCore.QTimer.singleShot(1200, lambda: self.restart_with_new(new_exe_path))
+        except Exception as e:
+            self.status_label.setText(f'Ошибка: {e}')
+            self.update_btn.setEnabled(True)
+            self.progress.setVisible(False)
+
+    def restart_with_new(self, new_exe_path):
+        # Запустить скачанный exe и выйти
+        try:
+            subprocess.Popen([new_exe_path])
+        except Exception as e:
+            self.status_label.setText(f'Ошибка запуска: {e}')
+            return
+        QtCore.QCoreApplication.quit()
+
 class DBChecker(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -1477,39 +1559,23 @@ class DBChecker(QMainWindow):
         logo_label.setPixmap(logo_pixmap)
         logo_label.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
         main_layout.addWidget(logo_label)
-        # --- Кнопка обновления ---
-        update_row = QHBoxLayout()
-        update_row.addStretch(1)
-        self.update_btn = QPushButton()
-        self.update_btn.setIcon(QIcon.fromTheme('view-refresh', QIcon(resource_path('flash.png'))))
-        self.update_btn.setToolTip('Проверить и скачать обновление')
-        self.update_btn.setFixedSize(32, 32)
-        self.update_btn.setStyleSheet('''
-            QPushButton {
-                background: transparent;
-                border: none;
-                border-radius: 16px;
-                padding: 0;
-            }
-            QPushButton:hover {
-                background: #222;
-            }
-        ''')
-        self.update_btn.clicked.connect(self.check_for_update_and_run)
-        update_row.addWidget(self.update_btn)
-        main_layout.addLayout(update_row)
-        # Вкладки
+        # --- Горизонтальная строка: только вкладки ---
+        top_row = QHBoxLayout()
         self.tabs = QTabWidget()
         self.main_tab = MainTab(self)
         self.products_tab = ProductsTab(self)
         self.lines_tab = LinesTab(self)
         self.help_tab = HelpTab(self)
+        self.update_tab = UpdateTab(self)
         self.tabs.addTab(self.main_tab, 'Главная')
         self.tabs.addTab(self.products_tab, 'Продукты')
         self.tabs.addTab(self.lines_tab, 'Линии')
         self.tabs.addTab(self.help_tab, 'Справка')
+        self.tabs.addTab(self.update_tab, 'Обновление')
         self.tabs.currentChanged.connect(self.on_tab_change)
-        main_layout.addWidget(self.tabs)
+        top_row.addWidget(self.tabs)
+        main_layout.addLayout(top_row)
+        # --- Основное содержимое (текущая вкладка) ---
         main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
 
@@ -1546,7 +1612,14 @@ class DBChecker(QMainWindow):
                     f.write(chunk)
 
         # 3. Запустить updater.exe и выйти
-        updater_path = os.path.join(os.path.dirname(sys.executable), "updater.exe")
+        if getattr(sys, 'frozen', False):
+            # Если запущено из exe
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # Если запущено из .py
+            base_dir = os.path.abspath(os.path.dirname(__file__))
+
+        updater_path = os.path.join(base_dir, "updater.exe")
         subprocess.Popen([updater_path, sys.executable, new_exe_path])
         sys.exit(0)
 
