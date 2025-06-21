@@ -11,6 +11,10 @@ from PyQt5.QtCore import QDate, QThread, pyqtSignal, QStringListModel, Qt, QEven
 from PyQt5.QtGui import QPixmap, QIcon, QMovie, QColor
 from PyQt5.QtSvg import QSvgWidget
 import psycopg2
+import requests
+import subprocess
+import time
+import shutil
 
 PROFILES_FILE = 'profiles.json'
 PRODUCTS_FILE = 'products.json'
@@ -791,6 +795,13 @@ class LinesTab(QWidget):
         self.update_list()
         main_layout.addWidget(self.list, 2)
         form_layout = QVBoxLayout()
+        # Новое поле для имени линии
+        name_row = QHBoxLayout()
+        name_label = QLabel('Название линии:')
+        self.line_name_edit = QLineEdit()
+        name_row.addWidget(name_label)
+        name_row.addWidget(self.line_name_edit)
+        form_layout.addLayout(name_row)
         self.inputs = {}
         fields = ['IP адрес', 'Порт', 'Логин', 'Пароль', 'База данных']
         for field in fields:
@@ -831,6 +842,7 @@ class LinesTab(QWidget):
             name = curr.text()
             self.selected_name = name
             line = self.parent.lines[name]
+            self.line_name_edit.setText(name)
             self.inputs['IP адрес'].setText(line['ip'])
             self.inputs['Порт'].setText(line['port'])
             self.inputs['Логин'].setText(line['user'])
@@ -838,26 +850,29 @@ class LinesTab(QWidget):
             self.inputs['База данных'].setText(line['dbname'])
         else:
             self.selected_name = None
+            self.line_name_edit.clear()
             for edit in self.inputs.values():
                 edit.clear()
 
     def add_line(self):
         for edit in self.inputs.values():
             edit.clear()
+        self.line_name_edit.clear()
         self.list.clearSelection()
         self.selected_name = None
 
     def save_line(self):
         data = {k: self.inputs[k].text() for k in self.inputs}
-        if not all(data.values()):
-            QMessageBox.warning(self, 'Ошибка', 'Заполните все поля!')
+        name = self.line_name_edit.text().strip()
+        if not all(data.values()) or not name:
+            QMessageBox.warning(self, 'Ошибка', 'Заполните все поля и имя линии!')
             return
-        if self.selected_name:
-            name = self.selected_name
-        else:
-            name, ok = QInputDialog.getText(self, 'Имя линии', 'Введите имя линии:')
-            if not ok or not name:
+        # Если редактируем и имя изменилось — переименовать ключ
+        if self.selected_name and self.selected_name != name:
+            if name in self.parent.lines:
+                QMessageBox.warning(self, 'Ошибка', f'Линия с именем "{name}" уже существует!')
                 return
+            self.parent.lines[name] = self.parent.lines.pop(self.selected_name)
         self.parent.lines[name] = {
             'ip': data['IP адрес'],
             'port': data['Порт'],
@@ -872,6 +887,7 @@ class LinesTab(QWidget):
         items = self.list.findItems(name, QtCore.Qt.MatchExactly)
         if items:
             self.list.setCurrentItem(items[0])
+        self.selected_name = name
 
     def del_line(self):
         if not self.selected_name:
@@ -1461,6 +1477,27 @@ class DBChecker(QMainWindow):
         logo_label.setPixmap(logo_pixmap)
         logo_label.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop)
         main_layout.addWidget(logo_label)
+        # --- Кнопка обновления ---
+        update_row = QHBoxLayout()
+        update_row.addStretch(1)
+        self.update_btn = QPushButton()
+        self.update_btn.setIcon(QIcon.fromTheme('view-refresh', QIcon(resource_path('flash.png'))))
+        self.update_btn.setToolTip('Проверить и скачать обновление')
+        self.update_btn.setFixedSize(32, 32)
+        self.update_btn.setStyleSheet('''
+            QPushButton {
+                background: transparent;
+                border: none;
+                border-radius: 16px;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background: #222;
+            }
+        ''')
+        self.update_btn.clicked.connect(self.check_for_update_and_run)
+        update_row.addWidget(self.update_btn)
+        main_layout.addLayout(update_row)
         # Вкладки
         self.tabs = QTabWidget()
         self.main_tab = MainTab(self)
@@ -1484,6 +1521,34 @@ class DBChecker(QMainWindow):
             self.products_tab.update_list()
         elif idx == 2:
             self.lines_tab.update_list()
+
+    def check_for_update_and_run(self):
+        api_url = "https://api.github.com/repos/Andrejj12380/CheckDB/releases/latest"
+        r = requests.get(api_url)
+        latest = r.json()
+        if "assets" not in latest or not latest["assets"]:
+            QtWidgets.QMessageBox.warning(self, "Обновление", "Нет доступных обновлений на GitHub!")
+            return
+        exe_name = "CheckDB.exe"
+        for asset in latest["assets"]:
+            if asset["name"] == exe_name:
+                download_url = asset["browser_download_url"]
+                break
+        else:
+            QtWidgets.QMessageBox.warning(self, "Обновление", "Не найден файл обновления!")
+            return
+        # 2. Скачать новый exe во временную папку
+        new_exe_path = os.path.join(os.path.dirname(sys.executable), "CheckDB_new.exe")
+        with requests.get(download_url, stream=True) as r:
+            r.raise_for_status()
+            with open(new_exe_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+        # 3. Запустить updater.exe и выйти
+        updater_path = os.path.join(os.path.dirname(sys.executable), "updater.exe")
+        subprocess.Popen([updater_path, sys.executable, new_exe_path])
+        sys.exit(0)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

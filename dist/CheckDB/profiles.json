@@ -1,26 +1,5 @@
 {
-  "Спайдер": {
-    "ip": "localhost",
-    "port": "5432",
-    "user": "postgres",
-    "password": "postgres",
-    "dbname": "marking"
-  },
-  "Спайдер 2": {
-    "ip": "localhost",
-    "port": "5432",
-    "user": "postgres",
-    "password": "postgres",
-    "dbname": "marking"
-  },
-  "Дансония": {
-    "ip": "192.168.250.1",
-    "port": "5432",
-    "user": "postgres",
-    "password": "postgres",
-    "dbname": "postgres"
-  },
-  "123": {
+  "5 л": {
     "ip": "localhost",
     "port": "5432",
     "user": "postgres",
