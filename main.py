@@ -1278,11 +1278,32 @@ class UpdateTab(QWidget):
             self.progress.setVisible(False)
 
     def restart_with_new(self, new_exe_path):
-        # Запустить скачанный exe и выйти
+        # Путь к текущему exe
+        if getattr(sys, 'frozen', False):
+            old_exe = sys.executable
+        else:
+            old_exe = os.path.abspath(sys.argv[0])
         try:
-            subprocess.Popen([new_exe_path])
+            # Закрыть программу (будет ниже)
+            # Удалить старый exe
+            try:
+                os.remove(old_exe)
+            except Exception as e:
+                self.status_label.setText(f'Не удалось удалить старый exe: {e}')
+                self.update_btn.setEnabled(True)
+                return
+            # Переименовать новый exe
+            try:
+                os.rename(new_exe_path, old_exe)
+            except Exception as e:
+                self.status_label.setText(f'Не удалось переименовать новый exe: {e}')
+                self.update_btn.setEnabled(True)
+                return
+            # Запустить новый exe
+            subprocess.Popen([old_exe])
         except Exception as e:
             self.status_label.setText(f'Ошибка запуска: {e}')
+            self.update_btn.setEnabled(True)
             return
         QtCore.QCoreApplication.quit()
 
