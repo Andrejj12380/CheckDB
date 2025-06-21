@@ -14,7 +14,7 @@ for _ in range(30):
     except PermissionError:
         time.sleep(1)
 
-# Копируем новый exe на место старого
+# Переименовываем новый exe
 shutil.move(new_exe, old_exe)
 
 # Запускаем новый exe
