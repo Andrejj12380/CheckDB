@@ -1221,11 +1221,12 @@ class UpdateTab(QWidget):
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
         self.update_btn = QPushButton('Проверить\nи обновить')
-        self.update_btn.setFixedHeight(64)
+        self.update_btn.setFixedHeight(128)
         self.update_btn.setFixedWidth(220)
         self.update_btn.setStyleSheet('font-size: 22px; border-radius: 18px; text-align: center; line-height: 120%;')
         self.update_btn.clicked.connect(self.start_update)
         layout.addWidget(self.update_btn)
+        layout.setAlignment(self.update_btn, QtCore.Qt.AlignHCenter)
         layout.addStretch(1)
         self.setLayout(layout)
 
