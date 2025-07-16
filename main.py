@@ -5,7 +5,7 @@ import csv
 from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout,
-    QMessageBox, QComboBox, QDateEdit, QInputDialog, QTabWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem, QFileDialog, QDialog, QCompleter, QAction, QTextEdit, QScrollArea, QListView
+    QMessageBox, QComboBox, QDateEdit, QInputDialog, QTabWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem, QFileDialog, QDialog, QCompleter, QAction, QTextEdit, QScrollArea, QListView, QAbstractScrollArea
 )
 from PyQt5.QtCore import QDate, QThread, pyqtSignal, QStringListModel, Qt, QEvent, QTimer
 from PyQt5.QtGui import QPixmap, QIcon, QMovie, QColor
@@ -434,7 +434,17 @@ class MainTab(QWidget):
         self.result_table.setColumnCount(0)
         self.result_table.setRowCount(0)
         self.result_table.setVisible(False)
-        layout.addWidget(self.result_table)
+        self.result_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        self.table_scroll = QScrollArea()
+        self.table_scroll.setWidgetResizable(True)
+        self.table_scroll.setWidget(self.result_table)
+        self.table_scroll.setVisible(False)
+        layout.addWidget(self.table_scroll)
+        # Кнопка "Развернуть таблицу"
+        self.expand_btn = QPushButton('Развернуть таблицу')
+        self.expand_btn.setVisible(False)
+        self.expand_btn.clicked.connect(self.show_big_table)
+        layout.addWidget(self.expand_btn)
         # Кнопка выгрузки в CSV
         self.export_btn = QPushButton('Выгрузить в CSV')
         self.export_btn.setVisible(False)
@@ -468,8 +478,10 @@ class MainTab(QWidget):
 
     def clear_results(self):
         self.result_table.setVisible(False)
+        self.table_scroll.setVisible(False)
         self.export_btn.setVisible(False)
         self.clear_btn.setVisible(False)
+        self.expand_btn.setVisible(False)
         self.count_label.setVisible(False)
         self.status_label.setVisible(False)
 
@@ -521,8 +533,10 @@ class MainTab(QWidget):
         self.loading.close()
         if status == 'error':
             self.result_table.setVisible(False)
+            self.table_scroll.setVisible(False)
             self.export_btn.setVisible(False)
             self.clear_btn.setVisible(False)
+            self.expand_btn.setVisible(False)
             self.count_label.setVisible(False)
             self.status_label.setText('<span style="color:#E53935">ОШИБКА</span>')
             self.status_label.setVisible(True)
@@ -530,16 +544,20 @@ class MainTab(QWidget):
             return
         if not rows:
             self.result_table.setVisible(False)
+            self.table_scroll.setVisible(False)
             self.export_btn.setVisible(False)
             self.clear_btn.setVisible(True)
+            self.expand_btn.setVisible(False)
             self.count_label.setVisible(True)
             self.count_label.setText('Найдено строк: 0')
             self.status_label.setText('<span style="color:#E53935">НЕТ ЗАПИСЕЙ</span>')
             self.status_label.setVisible(True)
             return
         self.result_table.setVisible(True)
+        self.table_scroll.setVisible(True)
         self.export_btn.setVisible(True)
         self.clear_btn.setVisible(True)
+        self.expand_btn.setVisible(True)
         self.count_label.setVisible(True)
         self.count_label.setText(f'Найдено строк: {len(rows)}')
         self.status_label.setText('<span style="color:#43A047">OK</span>')
@@ -629,6 +647,32 @@ class MainTab(QWidget):
         if idx != -1:
             self.line_combo.setCurrentIndex(idx)
         self.line_combo.blockSignals(False)
+
+    def show_big_table(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle('Таблица проверки — развернуто')
+        dlg.resize(1200, 700)
+        layout = QVBoxLayout(dlg)
+        table = QTableWidget()
+        # Копируем структуру и данные
+        table.setColumnCount(self.result_table.columnCount())
+        table.setRowCount(self.result_table.rowCount())
+        table.setHorizontalHeaderLabels([self.result_table.horizontalHeaderItem(i).text() for i in range(self.result_table.columnCount())])
+        for i in range(self.result_table.rowCount()):
+            for j in range(self.result_table.columnCount()):
+                src_item = self.result_table.item(i, j)
+                if src_item:
+                    table.setItem(i, j, QTableWidgetItem(src_item.text()))
+        table.resizeColumnsToContents()
+        table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(table)
+        layout.addWidget(scroll)
+        btn_close = QPushButton('Закрыть')
+        btn_close.clicked.connect(dlg.accept)
+        layout.addWidget(btn_close)
+        dlg.exec_()
 
 class ProductDelegate(QtWidgets.QStyledItemDelegate):
     def paint(self, painter, option, index):
